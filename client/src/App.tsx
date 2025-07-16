@@ -1,170 +1,161 @@
+// src/App.tsx
 import "./App.css";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
-import { getAuth, signInAnonymously, User } from "firebase/auth";
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, Timestamp } from "firebase/firestore";
+import {
+  getAuth,
+  signInAnonymously,
+  onAuthStateChanged,
+  User,
+} from "firebase/auth";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  serverTimestamp,
+  Timestamp,
+  FieldValue,
+} from "firebase/firestore";
 import { firebaseApp, db } from "./firebaseConfig";
 
-import VideoChat from "./screens/VideoChat";
-import SplashScreen from "./components/SplashScreen";
-import OnboardingScreen from "./screens/OnboardingScreen";
-import ReferToUnlock from "./screens/ReferToUnlock";
+// screens
+import SplashScreen      from "./components/SplashScreen";
+import OnboardingScreen  from "./screens/OnboardingScreen";
+import GenderSelect      from "./screens/GenderSelect";
+import HomePage          from "./screens/HomePage";
+import VideoChat         from "./screens/VideoChat";
+import VoicePage         from "./screens/VoicePage";
+import ChatPage          from "./screens/ChatPage";
+import FriendsPage       from "./screens/FriendsPage";
+import ProfilePage       from "./screens/ProfilePage";
+import ReferToUnlock     from "./screens/ReferToUnlock";
 import ReferralCodeScreen from "./screens/ReferralCode";
-import GenderSelect from "./screens/GenderSelect";
-import ChatPage from "./screens/ChatPage";
-import VoicePage from "./screens/VoicePage";
-import HomePage from "./screens/HomePage";
-import ProfilePage from "./screens/ProfilePage";
-import UserSetup from "./screens/UserSetup";
-import PersonalChat from "./screens/PersonalChat";
-import FriendsPage from "./screens/FriendsPage";
-import AIChatbotPage from "./screens/AIChatbotPage";
+import UserSetup         from "./screens/UserSetup";
+import PersonalChat      from "./screens/PersonalChat";
+import AIChatbotPage     from "./screens/AIChatbotPage";
 
-import { useNavigate } from "react-router-dom";
-
+// ──────────────────────────────── types
 interface UserData {
   uid: string;
-  onboardingComplete: boolean;
+  username?: string | null;
   gender?: string | null;
+  language: string;
+  onboardingComplete: boolean;
   referralCode?: string | null;
   referredBy?: string | null;
-  ownReferralCode: string;
+  ownReferralCode: string;   // generated from uid
   referralCount: number;
   premiumUntil?: Timestamp | null;
   createdAt: Timestamp;
-  username?: string | null;
-  language: string;
-  referredAt?: any;
 }
 
+// ──────────────────────────────── helpers
+const generateOwnReferralCode = (uid: string) => uid.slice(0, 6).toUpperCase();
+
+// ──────────────────────────────── component
 function App() {
   const [showSplash, setShowSplash] = useState(true);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading]   = useState(true);
   const navigate = useNavigate();
-  const auth = getAuth(firebaseApp);
+  const auth     = getAuth(firebaseApp);
 
+  /* ───────── Splash → anon auth + Firestore bootstrap ───────── */
   useEffect(() => {
-    if (!showSplash) {
-      const initializeUser = async () => {
-        try {
-          // Sign in anonymously with Firebase
-          const userCredential = await signInAnonymously(auth);
-          const user = userCredential.user;
-          console.log("Signed in anonymously with UID:", user.uid);
+    if (showSplash) return; // wait until splash is done
 
-          // Check if user document exists in Firestore
-          const userDocRef = doc(db, "users", user.uid);
-          const userDocSnap = await getDoc(userDocRef);
+    const bootstrapUser = async () => {
+      try {
+        // 1) Sign in (or get existing) anonymous user
+        const cred = await signInAnonymously(auth);
+        const user = cred.user;
+        const uid  = user.uid;
 
-          if (!userDocSnap.exists()) {
-            // New user - create document with initial data
-            const initialUserData: Partial<UserData> = {
-              uid: user.uid,
-              onboardingComplete: false,
-              gender: null,
-              username: null,
-              language: 'en', // Default language
-              referredBy: null,
-              referralId: generateUniqueReferralId(),
-              referralCount: 0,
-              createdAt: new Date()
-            };
+        // 2) Fetch / create Firestore user doc
+        const userRef = doc(db, "users", uid);
+        const snap    = await getDoc(userRef);
 
-            await setDoc(userDocRef, initialUserData);
-            console.log("Created new user document");
-            
-            // Redirect to onboarding for new users
-            navigate("/onboarding", { replace: true });
-          } else {
-            // Existing user - check onboarding status
-            const userData = userDocSnap.data() as UserData;
-            console.log("Existing user data:", userData);
+        let userData: UserData;
 
-            // Backfill referralId and referralCount for existing users
-            const updateFields: Partial<UserData> = {};
-            if (!userData.referralId) {
-              updateFields.referralId = generateUniqueReferralId();
-            }
-            if (typeof userData.referralCount !== 'number') {
-              updateFields.referralCount = 0;
-            }
-            
-            // Update document if any fields need to be backfilled
-            if (Object.keys(updateFields).length > 0) {
-              await updateDoc(userDocRef, updateFields);
-              console.log("Backfilled missing fields:", updateFields);
-            }
+        if (!snap.exists()) {
+          // New user → create doc
+          userData = {
+            uid,
+            username: null,
+            gender: null,
+            language: "en",
+            onboardingComplete: false,
+            referralCode: null,
+            referredBy: null,
+            ownReferralCode: generateOwnReferralCode(uid),
+            referralCount: 0,
+            premiumUntil: null,
+            createdAt: serverTimestamp() as unknown as Timestamp,
+          };
+          await setDoc(userRef, userData);
+          console.log("🔥 New user document created");
+        } else {
+          userData = snap.data() as UserData;
 
-          if (userData.referredBy === undefined) {
-            updateFields.referredBy = null;
-          }
-          if (userData.referralCode === undefined) {
-            updateFields.referralCode = null;
-          }
-          if (userData.premiumUntil === undefined) {
-            updateFields.premiumUntil = null;
-          }
-          if (!userData.createdAt) {
-            updateFields.createdAt = serverTimestamp();
-          }
-            if (!userData.onboardingComplete) {
-          // Backfill missing fields for existing users
-              navigate("/onboarding", { replace: true });
-          if (!userData.ownReferralCode) {
-            updateFields.ownReferralCode = user.uid.slice(0, 6);
-          }
-        } catch (error) {
-          console.error("Error during user initialization:", error);
-          // Fallback to onboarding on error
-          navigate("/onboarding", { replace: true });
-        } finally {
-          setIsLoading(false);
+          // 3) Back‑fill missing fields
+          const patch: Partial<UserData> = {};
+          if (!userData.ownReferralCode)
+            patch.ownReferralCode = generateOwnReferralCode(uid);
+          if (typeof userData.referralCount !== "number")
+            patch.referralCount = 0;
+          if (userData.referredBy === undefined) patch.referredBy = null;
+          if (userData.referralCode === undefined) patch.referralCode = null;
+          if (!userData.createdAt) patch.createdAt = serverTimestamp();
+          if (Object.keys(patch).length)
+            await updateDoc(userRef, patch).then(() =>
+              console.log("🛠 Back‑filled:", patch)
+            );
         }
-      };
 
-      initializeUser();
-    }
-  }, [showSplash, navigate, auth]);
+        // 4) Routing based on onboarding flag
+        if (!userData.onboardingComplete) {
+          navigate("/onboarding", { replace: true });
+        }
+      } catch (err) {
+        console.error("Auth/Firestore init failed:", err);
+        navigate("/onboarding", { replace: true }); // safest fallback
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
-  const handleSplashComplete = () => {
-    setShowSplash(false);
-  };
+    bootstrapUser();
+  }, [showSplash, auth, navigate]);
 
-  if (showSplash) {
-    return <SplashScreen onComplete={handleSplashComplete} />;
-  }
+  /* ───────── Splash component toggle ───────── */
+  if (showSplash)
+    return <SplashScreen onComplete={() => setShowSplash(false)} />;
 
-  if (isLoading) {
+  /* ───────── Loading spinner ───────── */
+  if (isLoading)
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-rose-50 via-pink-50 to-purple-50">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-rose-500 mx-auto mb-4"></div>
-          <p className="text-rose-600 font-medium">Loading...</p>
-        </div>
+      <div className="flex items-center justify-center min-h-screen bg-rose-50">
+        <span className="animate-spin border-4 border-rose-400 border-t-transparent rounded-full h-12 w-12" />
       </div>
     );
-  }
 
+  /* ───────── Routes ───────── */
   return (
-    <div>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/onboarding" element={<OnboardingScreen />} />
-        <Route path="/user-setup" element={<UserSetup />} />
-        <Route path="/premium-trial" element={<ReferToUnlock />} />
-        <Route path="/home" element={<HomePage />} />
-        <Route path="/gender-select" element={<GenderSelect />} />
-        <Route path="/video-chat" element={<VideoChat />} />
-        <Route path="/voice" element={<VoicePage />} />
-        <Route path="/personal-chat" element={<PersonalChat />} />
-        <Route path="/chat" element={<ChatPage />} />
-        <Route path="/friends" element={<FriendsPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/refer" element={<ReferToUnlock />} />
-        <Route path="/referral-code" element={<ReferralCodeScreen />} />
-        <Route path="/ai-chatbot" element={<AIChatbotPage />} />
-      </Routes>
-    </div>
+    <Routes>
+      <Route path="/"               element={<HomePage />} />
+      <Route path="/onboarding"     element={<OnboardingScreen />} />
+      <Route path="/user-setup"     element={<UserSetup />} />
+      <Route path="/gender-select"  element={<GenderSelect />} />
+      <Route path="/video-chat"     element={<VideoChat />} />
+      <Route path="/voice"          element={<VoicePage />} />
+      <Route path="/chat"           element={<ChatPage />} />
+      <Route path="/personal-chat"  element={<PersonalChat />} />
+      <Route path="/friends"        element={<FriendsPage />} />
+      <Route path="/profile"        element={<ProfilePage />} />
+      <Route path="/refer"          element={<ReferToUnlock />} />
+      <Route path="/referral-code"  element={<ReferralCodeScreen />} />
+      <Route path="/ai-chatbot"     element={<AIChatbotPage />} />
+    </Routes>
   );
 }
 
